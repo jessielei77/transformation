@@ -1,0 +1,209 @@
+import net.researchgate.release.GitAdapter
+import org.yaml.snakeyaml.Yaml
+
+apply plugin: "java"
+apply plugin: "scala"
+apply plugin: "net.researchgate.release"
+apply plugin: "maven-publish"
+apply plugin: "maven"
+def artifactVersion = null
+def destinationUrl = null
+def isBamboo = null
+def properties = null
+def bambooKey = null
+
+task initializeVariables {
+    isBamboo = System.getenv("bamboo_planRepository_branch") != null && System.getenv("bamboo_planRepository_branch").startsWith("release/") ? true : false
+    bambooKey = System.getenv("bamboo_buildResultKey") != null ? System.getenv("bamboo_buildResultKey") : "local"
+    properties = (Properties) new Properties()
+    file("gradle.properties").withInputStream { properties.load(it) }
+    if (isBamboo) {
+        destinationUrl = "https://artifactory.devtools.syd.c1.macquarie.com/artifactory/ofr-releases/"
+        artifactVersion = properties.getAt("version")
+    } else {
+        destinationUrl = "https://artifactory.devtools.syd.c1.macquarie.com/artifactory/ofr-snapshots/"
+        artifactVersion = properties.getAt("version") + "-SNAPSHOT"
+    }
+    version=artifactVersion
+}
+
+compileJava.dependsOn(initializeVariables,processResources)
+
+ext {
+    JUNIT_VERSION = '4.12'
+    SPARK_VERSION = '2.4.0'
+}
+
+sourceCompatibility = 1.8
+
+configurations {
+    provided
+}
+
+sourceSets {
+    main {
+        compileClasspath += configurations.provided
+    }
+}
+
+
+dependencies {
+    provided "org.apache.spark:spark-core_2.11:2.4.0"
+    provided "org.apache.spark:spark-sql_2.11:2.4.0"
+    provided "org.apache.spark:spark-hive_2.11:2.4.0"
+    implementation "com.fasterxml.jackson.core:jackson-databind:2.6.7.1"
+    provided "org.apache.hadoop:hadoop-aws:3.1.1"
+    compile "org.scala-lang:scala-library:2.11.12"
+    compile "com.alibaba:fastjson:1.2.76"
+    compile(group: 'com.amazonaws', name: 'aws-java-sdk-s3', version: '1.11.86')
+    implementation 'org.apache.parquet:parquet-avro:1.12.0'
+    implementation 'org.apache.parquet:parquet-hadoop:1.12.0'
+    provided 'org.apache.hadoop:hadoop-core:1.2.1'
+	
+    configurations.all {
+	   exclude group:"org.slf4j", module: "slf4j-log4j12"
+	   exclude group:"org.slf4j", module: "slf4j-api"
+	   exclude group:"log4j", module: "log4j"
+	   }
+}
+
+
+release {
+    failOnCommitNeeded = false
+    failOnPublishNeeded = false
+    failOnSnapshotDependencies = true
+    failOnUnversionedFiles = false
+    failOnUpdateNeeded = false
+    revertOnFail = true
+
+    preCommitText = "Upgrading version "
+    preTagCommitMessage = "[Gradle Release Plugin] - pre tag commit: "
+    tagCommitMessage = "[Gradle Release Plugin] - creating tag: "
+    newVersionCommitMessage = "[Gradle Release Plugin] ${artifactVersion} - new version commit: "
+    tagTemplate = "openpages-${artifactVersion}-${bambooKey}"
+    versionPropertyFile = "gradle.properties"
+    versionProperties = [""]
+    buildTasks = ["build"]
+    scmAdapters = [
+            GitAdapter
+    ]
+    git {
+        requireBranch = ''
+        pushToRemote = 'origin'
+        pushToBranchPrefix = ''
+        commitVersionFileOnly = true
+        signTag = false
+    }
+}
+
+task startmessage {
+    println 'Starting Build'
+}
+
+task printversion {
+    println artifactVersion
+    println destinationUrl
+}
+
+beforeReleaseBuild.dependsOn startmessage
+afterReleaseBuild.dependsOn publish
+afterReleaseBuild.dependsOn printversion
+
+jar {
+    manifest {
+        attributes(
+                'Main-Class': 'com.macquarie.rmg.openpages.App',
+                'Implementation-Version': artifactVersion
+        )
+    }
+
+    from {
+        configurations.compile.collect { it.isDirectory() ? it : zipTree(it) }
+        configurations.runtime.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+}
+jar.dependsOn test
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            artifact 'build/libs/openpages-transformation-'+artifactVersion+'.jar'
+            groupId 'com.macquarie.rmg.openpages'
+            artifactId 'openpages-transformation'
+            version = artifactVersion
+        }
+    }
+    repositories {
+        maven {
+            credentials {
+                username artifactoryUser
+                password artifactoryPassword
+            }
+            url destinationUrl
+
+        }
+    }
+}
+
+buildscript {
+    ext.repos = {
+        mavenLocal()
+
+        maven {
+            name "ofr-releases"
+            url "https://artifactory.devtools.syd.c1.macquarie.com/artifactory/ofr-releases/"
+            credentials {
+                username artifactoryUser
+                password artifactoryPassword
+            }
+        }
+        maven {
+            name "maven-central"
+            url "https://artifactory.devtools.syd.c1.macquarie.com:443/artifactory/maven-central/"
+            credentials {
+                username artifactoryUser
+                password artifactoryPassword
+            }
+        }
+        maven {
+            name "atlassian-public"
+            url "https://artifactory.devtools.syd.c1.macquarie.com/artifactory/atlassian-public/"
+            credentials {
+                username artifactoryUser
+                password artifactoryPassword
+            }
+        }
+        maven {
+            name "most-releases"
+            url "https://artifactory.devtools.syd.c1.macquarie.com/artifactory/most-releases/"
+            credentials {
+                username artifactoryUser
+                password artifactoryPassword
+            }
+        }
+        maven {
+            name "maven-central-cache"
+            url "https://artifactory.devtools.syd.c1.macquarie.com/artifactory/maven-central-cache/"
+            credentials {
+                username artifactoryUser
+                password artifactoryPassword
+            }
+        }
+
+
+        maven {
+            name "thirdparty"
+            url "https://artifactory.devtools.syd.c1.macquarie.com/artifactory/thirdparty/"
+            credentials {
+                username artifactoryUser
+                password artifactoryPassword
+            }
+        }
+    }
+    repositories repos
+    dependencies {
+        classpath group: "org.yaml", name: "snakeyaml", version: "1.25"
+        classpath "net.researchgate:gradle-release:2.6.0"
+    }
+}
+repositories repos
